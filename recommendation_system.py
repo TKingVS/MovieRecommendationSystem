@@ -192,9 +192,7 @@ k = 20
 # print(test(pearson_similarity, k, do_iuf=True))
 # print(test(pearson_similarity, k, do_ca=True))
 # print(test(pearson_similarity, k, do_ca=True, do_iuf=True))
-print(test(item_adj_cos_sim, k, collab_filter=item_collab_filter))
+# print(test(item_adj_cos_sim, k, collab_filter=item_collab_filter))
 
-# for m in [5, 10, 20]:
-#     write_result(m, cosine_similarity, 20)
- 
-# 3724475737061294
+for m in [5, 10, 20]:
+    write_result(m, cosine_similarity, 20)
