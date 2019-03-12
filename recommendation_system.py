@@ -17,6 +17,11 @@ def getIUF(train_data):
     user_count[user_count[:] == 0] = 1 # Minimum count of 1
     return np.log(200 / user_count)
 
+def getIMF(train_data):
+    movie_count = np.sum( np.logical_and(np.ones(train_data.shape), train_data), axis=1)
+    movie_count[movie_count[:] == 0] = 1 # Minimum count of 1
+    return np.log(1000 / movie_count)
+
 
 def cosine_similarity(train_data, active_ratings, do_iuf=False):
     if do_iuf:
@@ -26,8 +31,18 @@ def cosine_similarity(train_data, active_ratings, do_iuf=False):
 
     return np.dot(train_data, active_ratings) / (norm(train_data, axis=1)*norm(active_ratings))
 
-def item_adj_cos_sim(train_data, movie_id):
+def item_adj_cos_sim(train_data, movie_ratings, do_imf=False):
     train_data = np.array(train_data, dtype=np.float64)
+
+    if do_imf:
+        imf = getIMF(train_data)
+        train_data = (train_data.T * imf).T
+        movie_ratings = (movie_ratings.T * imf).T
+
+    ma = np.mean(movie_ratings)
+    for i, r in enumerate(movie_ratings):
+        if r != 0:
+            movie_ratings[i] -= ma
 
     for i, user_ratings in enumerate(train_data):
         avg = np.mean(user_ratings)
@@ -37,13 +52,11 @@ def item_adj_cos_sim(train_data, movie_id):
 
     similarities = np.zeros(train_data.shape[1])
 
-    ratings_j = train_data[:, movie_id]
-
     for i in range(train_data.shape[1]):
         ratings_i = train_data[:, i]
-        similarities[i] = np.dot(ratings_i, ratings_j)
+        similarities[i] = np.dot(ratings_i, movie_ratings)
         similarities[i] /= np.sqrt(np.sum(np.power(ratings_i, 2)))
-        similarities[i] /= np.sqrt(np.sum(np.power(ratings_j, 2)))
+        similarities[i] /= np.sqrt(np.sum(np.power(movie_ratings, 2)))
         if (np.isnan(similarities[i])):
             similarities[i] = 0.0
 
@@ -75,7 +88,6 @@ def pearson_similarity(train_data, active_ratings, do_iuf=False):
     similarities = np.dot(train_data, active_ratings)
     similarities /= np.sqrt(np.sum(np.power(active_ratings, 2)))
     similarities /= np.sqrt(np.sum(np.power(train_data, 2), axis=1))
-    #print(similarities)
     return similarities
 
 def knearestneighbor(similarities, k):
@@ -94,9 +106,6 @@ def basic_collab_filter(train_data, user_ratings, movie_id, k, calc_similarities
     train_data = train_data[train_data[:, movie_id - 1] != 0]
  
     similarities = calc_similarities(train_data, user_ratings, do_iuf)
-
-    if do_secret:
-        similarities *= np.log(np.sum(np.logical_and(train_data, user_ratings)))
  
     if do_ca:
         similarities = similarities * np.power(np.abs(similarities), 1.5)
@@ -110,15 +119,27 @@ def basic_collab_filter(train_data, user_ratings, movie_id, k, calc_similarities
  
     return result
 
-def item_collab_filter(train_data, user_ratings, movie_id, k, calc_similarities=item_adj_cos_sim):
+def item_collab_filter(train_data, user_ratings, movie_id, k, do_imf=False, calc_similarities=item_adj_cos_sim):
+    train_data = np.copy(train_data)
+    movie_ratings = np.copy(train_data[:, movie_id - 1])
+    train_data[:, movie_id - 1] = np.zeros(train_data.shape[0])
+
     # remove movies user hasn't rated
     train_data = train_data[:, np.nonzero(user_ratings)[0]]
-    # remove nonzero entries form user data
+    # remove nonzero entries from user data
     user_ratings = user_ratings[np.nonzero(user_ratings)[0]]
-    
-    similarities = calc_similarities(train_data, movie_id)
+
+    similarities = calc_similarities(train_data, movie_ratings, do_imf)
 
     result = np.dot(similarities, user_ratings) / np.sum(similarities)
+
+    if np.isnan(result):
+        return 3
+
+    if result < 1:
+        result = 1
+    if result > 5:
+        result = 5
 
     return result
  
@@ -128,7 +149,7 @@ def get_user_ratings(user_data):
         user_ratings[row[1] - 1] = row[2]
     return user_ratings
  
-def write_result(m, calc_similarities, k, do_iuf=False, do_ca=False, collab_filter=basic_collab_filter):
+def write_result(m, calc_similarities, k, do_iuf=False, do_ca=False, do_imf=False, collab_filter=basic_collab_filter):
     resultf = open("result" + str(m) + ".txt", "w")
  
     train_data = read_matrix("train.txt", "\t")
@@ -147,9 +168,9 @@ def write_result(m, calc_similarities, k, do_iuf=False, do_ca=False, collab_filt
  
             guess = 0
             if collab_filter == basic_collab_filter:
-                guess = collab_filter(train_data, user_ratings, test_data[i][1], k, calc_similarities)
+                guess = collab_filter(train_data, user_ratings, test_data[i][1], k, calc_similarities, do_iuf, do_ca)
             elif collab_filter == item_collab_filter:
-                guess = collab_filter(train_data, similarities, movie_id, k)
+                guess = collab_filter(train_data, user_ratings, test_data[i][1], k, do_imf)
             
             if (np.isnan(guess)):
                 print(i)
@@ -160,7 +181,7 @@ def write_result(m, calc_similarities, k, do_iuf=False, do_ca=False, collab_filt
     resultf.close()
     print(np.mean(np.array(guesses)))
 
-def test(calc_similarities, k, do_iuf=False, do_ca=False, collab_filter=basic_collab_filter):
+def test(calc_similarities, k, do_iuf=False, do_ca=False, do_imf=False, collab_filter=basic_collab_filter):
     data = read_matrix("train.txt", "\t")
     train_data = data[:180, :]
     test_data = data[180:, :]
@@ -178,7 +199,7 @@ def test(calc_similarities, k, do_iuf=False, do_ca=False, collab_filter=basic_co
             if collab_filter == basic_collab_filter:
                 guess = basic_collab_filter(train_data, sim_user, movie_id, k, calc_similarities, do_iuf, do_ca)
             elif collab_filter == item_collab_filter:
-                guess = item_collab_filter(train_data, sim_user, movie_id, k)
+                guess = item_collab_filter(train_data, sim_user, movie_id, k, do_imf)
             errors.append((guess - user[i])**2)
 
     errors = np.array(errors)
@@ -193,6 +214,7 @@ k = 20
 # print(test(pearson_similarity, k, do_ca=True))
 # print(test(pearson_similarity, k, do_ca=True, do_iuf=True))
 # print(test(item_adj_cos_sim, k, collab_filter=item_collab_filter))
+# print(test(item_adj_cos_sim, k, do_imf=True, collab_filter=item_collab_filter))
 
-for m in [5, 10, 20]:
-    write_result(m, cosine_similarity, 20)
+for m in (5, 10, 20):
+    write_result(m, item_adj_cos_sim, k, collab_filter=item_collab_filter)
